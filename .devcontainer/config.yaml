@@ -1,0 +1,8 @@
+/train:
+  command: echo
+  working_dir: /tmp
+  prepend_args:
+    - 'Hello'
+
+/detect:
+  command: echo
