@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import time
+import base64
 from http import HTTPStatus
 from typing import List, Tuple, Optional, Dict, Any, OrderedDict
 import subprocess
@@ -25,12 +26,13 @@ class CommandOptions:
 
     def __init__(
         self,
-        command: str,
+        command: str = "echo",
         working_dir: Optional[str] = None,
         prepend_args: Optional[List[str]] = None,
         append_args: Optional[List[str]] = None,
         static: Optional[bool] = False,
         capture_output: Optional[bool] = True,
+        file_names: Optional[List[str]] = None,
     ):
         """Iniitalize a new command options object."""
         self.command = command
@@ -39,17 +41,48 @@ class CommandOptions:
         self.append_args: List[str] = append_args or []
         self.is_static: bool = static
         self.capture_output = capture_output
+        self.file_names = file_names
+        self._dict = {
+            "command": command,
+            "working_dir": working_dir,
+            "prepend_args": prepend_args,
+            "append_args": append_args,
+            "static": static,
+            "capture_output": capture_output,
+            "file_name": file_name,
+        }
+
+    @property
+    def is_file_write(self) -> bool:
+        """Get whether this is a file write command."""
+        return self.file_names is not None
 
     @property
     def cwd(self) -> Optional[str]:
         """Get the currentworking directory."""
         return self.working_dir
 
-    def command_args(self, args: List[str] = None) -> List[str]:
+    def command_args(self, args: List[str] = None, decode64: bool = None) -> List[str]:
         """Merge arguments for command."""
+        if self.is_file_write:
+            arg_i = 0
+            for file_name in self.file_names:
+                file_path = os.path.join(self.working_dir or "", file_name)
+                with open(file_path, "wb") as f:
+                    content = args.pop(arg_i)
+                    if decode64:
+                        content = base64.b64decode(content)
+                    f.write(content)
+                arg_i += 1
+
         if self.is_static:
+            logger.info(f"{self.command} is marked static, ignoring args")
             return self.prepend_args + self.append_args
         return self.prepend_args + (args or []) + self.append_args
+
+    def __str__(self) -> str:
+        """Get string representation."""
+        return json.dumps(self._dict)
 
 
 class CommandRun:
@@ -94,8 +127,11 @@ class CommandParser:
 
         args = req.json.get("args", [])
         timeout = req.json.get("timeout", DEFAULT_TIMEOUT)
+        decode64 = req.json.get("decode64", False)
         jsonify_stdout = req.json.get("return_json", False)
-        args = options.command_args(args)
+        args = options.command_args(args, decode64)
+
+        logger.info(f"Command Options: {options}")
 
         cmd: List[str] = options.command.split(" ")
         cmd.extend(args)
@@ -108,6 +144,7 @@ class CommandParser:
     ) -> CommandRun:
         """Runs the given command in a subprocess."""
         start_time: float = time.time()
+        logger.info(f"Running command: {cmd[0]} with {len(cmd[1:])} args")
         proc = await create_subprocess_exec(
             cmd[0],
             *cmd[1:],
@@ -123,7 +160,7 @@ class CommandParser:
             stdout = outs.decode("utf-8")
             stderr = errs.decode("utf-8")
             returncode = proc.returncode
-            logger.info("Job finished with returncode: '{returncode}'.")
+            logger.info(f"Job finished with returncode: '{returncode}'.")
 
         except asyncio.TimeoutError:
             proc.terminate()
@@ -179,14 +216,9 @@ class ShellApi:
 
         def _dict_to_class(command_options) -> CommandOptions:
             """Convert a dictionary to a class instance."""
-            if isinstance(command_options, CommandOptions):
-                return command_options
-            return CommandOptions(
-                command=command_options.get("command"),
-                working_dir=command_options.get("working_dir", None),
-                prepend_args=command_options.get("prepend_args", None),
-                append_args=command_options.get("append_args", None),
-            )
+            if isinstance(command_options, dict):
+                return CommandOptions(**command_options)
+            return command_options
 
         def _process_options(command_options) -> List[CommandOptions]:
             """Process options from configuration."""
@@ -211,7 +243,7 @@ class ShellApi:
             logger.error(f"Failed to register command, {endpoint} already mapped.")
             return
 
-        logger.info(f"Registering {endpoint} for {commands}...")
+        logger.info(f"Registering {endpoint} for {len(commands)}...")
         self.app.add_url_rule(
             endpoint,
             view_func=CommandApiView.as_view(
@@ -235,14 +267,19 @@ class CommandApiView(MethodView):
             )
             report: str = ""
             error: str = ""
-            for command in self.commands:
+            logger.info(
+                json.dumps([str(command) for command in self.commands], indent=2)
+            )
+            command_list = self.commands
+            for command in command_list:
                 # Check if request data is correct and parse it
+                logger.info(str(command))
                 cmd, cwd, timeout, jsonify_stdout = CommandParser.parse_req(
                     request, command
                 )
-
+                if command.is_file_write:
+                    continue
                 result = await CommandParser.run_command(cmd, cwd=cwd, timeout=timeout)
-
                 if result.returncode != 0:
                     return make_response(
                         jsonify(
@@ -253,8 +290,8 @@ class CommandApiView(MethodView):
                         ),
                         HTTPStatus.INTERNAL_SERVER_ERROR,
                     )
-
                 if command.capture_output:
+                    logger.info("Capturing output")
                     report = f"{report}\n{result.report}"
                 error = f"{error}\n{result.error}"
 
@@ -265,7 +302,7 @@ class CommandApiView(MethodView):
                 )
 
             report = json.loads(result.report)
-            return make_response(jsonify(**report), HTTPStatus.OK)
+            return make_response(jsonify(report=report), HTTPStatus.OK)
 
         except Exception as err:
             logger.error(err)
@@ -287,7 +324,7 @@ command_file = os.environ.get(COMMAND_FILE, "config.yaml")
 if not os.path.isfile(command_file):
     raise FileNotFoundError(f"Commands file does not exist at {command_file}")
 
-with open(command_file, "r", encoding="utf-8") as f:
+with open(command_file, "r", encoding="ascii") as f:
     shell_api = ShellApi(flask_app, get_event_loop(), commands=yaml.safe_load(f))
 
 port = int(os.environ.get("PORT", 3000))

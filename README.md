@@ -76,6 +76,25 @@ Decide whether to capture the output of any command:
     - command: yolo detect image.jpg
 ```
 
+Save argument content to disk?
+
+```yaml
+/detect:
+    - command: echo 0
+      file_names:  # Index of file_names matches the argument index to be written
+        - test.jpg
+      static: True
+```
+
+## POST Requests
+
+Requests must be JSON payloads and can have any of the following properties:
+
+`args` - List of arguments to be passed to the `command`
+`decode64` - Singles the API should decode the arguments
+`return_json` - Try to jsonify the output of the command and return the deserialized object
+`timeout` - Set the timeout of the request
+
 
 ## Running the API
 
