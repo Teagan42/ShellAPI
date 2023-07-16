@@ -4,7 +4,7 @@ Simple, basic - definitely not production ready - API web server for any CLI-bas
 
 ## Installation
 
-The only dependencies are Flask and PyYaml. 
+The only dependencies are Flask and PyYaml.
 
 ```shell
 pip install flask==2.3.2 pyyaml==6.0.0
@@ -57,6 +57,25 @@ Or append static arguments after the invocation arguments:
     append_args:
         - --verbose
 ```
+
+Need to run a few commands in sequence? Not a problem:
+
+```yaml
+/detect:
+    - command: base64 -d --ignore-garbase -o image.jpg <
+    - command: yolo detect image.jpg
+      static: True  # <-- Tells the API not to inject the requests' arguments
+```
+
+Decide whether to capture the output of any command:
+
+```yaml
+/detect:
+    - command: base64 -d --ignore-garbase -o image.jpg <
+      capture_output: False
+    - command: yolo detect image.jpg
+```
+
 
 ## Running the API
 
