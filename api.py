@@ -108,7 +108,8 @@ class CommandParser:
         """Runs the given command in a subprocess."""
         start_time: float = time.time()
         proc = await create_subprocess_exec(
-            *cmd,
+            cmd[0],
+            " ".join(cmd[1:]),
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -124,19 +125,18 @@ class CommandParser:
             logger.info(f"Job finished with returncode: '{returncode}'.")
 
         except TimeoutError:
+            proc.terminate()
             stdout, _ = [s.decode("utf-8") for s in proc.communicate()]
             stderr = f"command timedout after {timeout} seconds."
             returncode = proc.returncode
             logger.error(f'Job failed: "{stderr}".')
 
         except Exception as err:
+            proc.terminate()
             returncode = -1
             stdout = None
             stderr = str(err)
             logger.error(f'Job failed: "{stderr}".')
-        finally:
-            if proc.returncode is None:
-                proc.terminate()
 
         end_time: float = time.time()
         process_time = end_time - start_time
@@ -169,7 +169,7 @@ class ShellApi:
         self,
         app,
         loop: AbstractEventLoop,
-        commands: Dict[str, CommandOptions | Dict[str, str]],
+        commands,
     ) -> None:
         """For use with Flask's `Application Factory`_ method."""
         self.app = app
@@ -232,7 +232,7 @@ class CommandApiView(MethodView):
 
             if result.returncode != 0:
                 return make_response(
-                    jsonify(command=cmd, error=result.stderr, report=result.report),
+                    jsonify(command=cmd, error=result.error, report=result.report),
                     HTTPStatus.INTERNAL_SERVER_ERROR,
                 )
 
@@ -268,7 +268,7 @@ if not os.path.isfile(command_file):
 with open(command_file, "r") as f:
     shell_api = ShellApi(flask_app, get_event_loop(), commands=yaml.safe_load(f))
 
-port = int(os.environ.get("port", 3000))
+port = int(os.environ.get("PORT", 3000))
 logger.info(f"Server is listening on port {port}")
 
-flask_app.run(port=port)
+flask_app.run(host="0.0.0.0", port=port)
