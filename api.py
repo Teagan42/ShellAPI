@@ -49,7 +49,7 @@ class CommandOptions:
             "append_args": append_args,
             "static": static,
             "capture_output": capture_output,
-            "file_name": file_name,
+            "file_names": file_names,
         }
 
     @property
