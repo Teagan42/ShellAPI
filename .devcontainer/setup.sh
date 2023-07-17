@@ -2,8 +2,8 @@
 # Stop on errors
 set -e
 
-cp config.yaml /workspaces/pyapi/.
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
-pip3 install -r requirements.txt
+cp $SCRIPT_DIR/config.yaml /workspaces/pyapi/.
 
-container install
+pip3 install --user -r $SCRIPT_DIR/requirements.txt
