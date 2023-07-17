@@ -1,5 +1,10 @@
 """Quick an dirty web server for any shell command."""
-from asyncio import AbstractEventLoop, get_event_loop, create_subprocess_exec, wait_for
+from asyncio import (
+    AbstractEventLoop,
+    get_event_loop,
+    create_subprocess_exec,
+    wait_for
+)
 import asyncio
 import json
 import os
@@ -39,9 +44,9 @@ class CommandOptions:
         self.working_dir = working_dir
         self.prepend_args: List[str] = prepend_args or []
         self.append_args: List[str] = append_args or []
-        self.is_static: bool = static
+        self.is_static: bool = static or False
         self.capture_output = capture_output
-        self.file_names = file_names
+        self.file_names = file_names or []
         self._dict = {
             "command": command,
             "working_dir": working_dir,
@@ -62,13 +67,19 @@ class CommandOptions:
         """Get the currentworking directory."""
         return self.working_dir
 
-    def command_args(self, args: List[str] = None, decode64: bool = None) -> List[str]:
+    def command_args(
+            self,
+            args: List[str] = [],
+            decode64: bool = False) -> List[str]:
         """Merge arguments for command."""
         if self.is_file_write:
             arg_i = 0
             for file_name in self.file_names:
                 file_path = os.path.join(self.working_dir or "", file_name)
-                with open(file_path, "wb") as f:
+                mode = "w"
+                if decode64:
+                    mode = "wb"
+                with open(file_path, mode) as f:
                     content = args.pop(arg_i)
                     if decode64:
                         content = base64.b64decode(content)
@@ -152,27 +163,31 @@ class CommandParser:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        stdout: Optional[str] = None
-        stderr: Optional[str] = None
+        stdout: str = ""
+        stderr: str = ""
         returncode: int = 0
         try:
-            outs, errs = await wait_for(proc.communicate(), timeout=int(timeout))
+            outs, errs = await wait_for(
+                proc.communicate(),
+                timeout=int(timeout))
             stdout = outs.decode("utf-8")
             stderr = errs.decode("utf-8")
-            returncode = proc.returncode
+            returncode = proc.returncode  # type: ignore
             logger.info(f"Job finished with returncode: '{returncode}'.")
 
         except asyncio.TimeoutError:
             proc.terminate()
-            stdout, _ = [s.decode("utf-8") for s in proc.communicate()]
+            stdout, _ = [
+                s.decode("utf-8") for s in await proc.communicate()
+            ]  # type: ignore
             stderr = f"command timedout after {timeout} seconds."
-            returncode = proc.returncode
+            returncode = proc.returncode  # type: ignore
             logger.error(f'Job failed: "{stderr}".')
 
         except Exception as err:
             proc.terminate()
             returncode = -1
-            stdout = None
+            stdout = ""
             stderr = str(err)
             logger.error(f'Job failed: "{stderr}".')
 
@@ -196,8 +211,8 @@ class ShellApi:
     def __init__(
         self,
         app=None,
-        loop: AbstractEventLoop = None,
-        commands: List[CommandOptions] = None,
+        loop: AbstractEventLoop = get_event_loop(),
+        commands: List[CommandOptions] = [],
     ) -> None:
         """Initialize a new shell api instance."""
         if app and commands:
@@ -237,10 +252,14 @@ class ShellApi:
 
         self.app.extensions["shellapi"] = self
 
-    def register_command(self, endpoint: str, commands: List[CommandOptions]) -> None:
+    def register_command(
+            self,
+            endpoint: str,
+            commands: List[CommandOptions]) -> None:
         """Register a command to a specified endpoint."""
         if self.__commands.get(endpoint):
-            logger.error(f"Failed to register command, {endpoint} already mapped.")
+            logger.error(
+                f"Failed to register command, {endpoint} already mapped.")
             return
 
         logger.info(f"Registering {endpoint} for {len(commands)}...")
@@ -260,6 +279,8 @@ class CommandApiView(MethodView):
 
     async def post(self):
         """Handle a POST request."""
+        jsonify_stdout = False
+        result = CommandRun("", "", 1000)
         try:
             logger.info(
                 f"Received request for endpoint: '{request.url_rule}'. "
@@ -268,7 +289,11 @@ class CommandApiView(MethodView):
             report: str = ""
             error: str = ""
             logger.info(
-                json.dumps([str(command) for command in self.commands], indent=2)
+                json.dumps([
+                    str(command)
+                    for command
+                    in self.commands
+                ], indent=2)
             )
             command_list = self.commands
             for command in command_list:
@@ -279,7 +304,10 @@ class CommandApiView(MethodView):
                 )
                 if command.is_file_write:
                     continue
-                result = await CommandParser.run_command(cmd, cwd=cwd, timeout=timeout)
+                result = await CommandParser.run_command(
+                    cmd,
+                    cwd=cwd,
+                    timeout=timeout)
                 if result.returncode != 0:
                     return make_response(
                         jsonify(
@@ -306,7 +334,10 @@ class CommandApiView(MethodView):
 
         except Exception as err:
             logger.error(err)
-            return make_response(jsonify(error=str(err)), HTTPStatus.BAD_REQUEST)
+            return make_response(
+                jsonify(error=str(err)),
+                HTTPStatus.BAD_REQUEST
+            )
 
     def __init__(
         self,
@@ -325,7 +356,10 @@ if not os.path.isfile(command_file):
     raise FileNotFoundError(f"Commands file does not exist at {command_file}")
 
 with open(command_file, "r", encoding="ascii") as f:
-    shell_api = ShellApi(flask_app, get_event_loop(), commands=yaml.safe_load(f))
+    shell_api = ShellApi(
+        flask_app,
+        get_event_loop(),
+        commands=yaml.safe_load(f))
 
 port = int(os.environ.get("PORT", 3000))
 logger.info(f"Server is listening on port {port}")
